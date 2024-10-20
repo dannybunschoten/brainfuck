@@ -1,11 +1,11 @@
-use std::collections::LinkedList;
+use std::collections::{HashMap, LinkedList};
 use std::fs;
 use std::io::Read;
 use std::str::Chars;
 
 const ALLOWED_CHARS: [char; 8] = ['+', '-', '[', ']', '>', '<', ',', '.'];
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Debug, Clone)]
 enum Command {
     Plus,
     Minus,
@@ -17,9 +17,28 @@ enum Command {
     Input,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Hash, Eq, Clone)]
+enum CompiledCommand {
+    Plus,
+    Minus,
+    LeftLoop,
+    RightLoop,
+    Left,
+    Right,
+    Output,
+    Input,
+    SetZero,
+}
+
+#[derive(Debug, PartialEq, Clone)]
 struct CollapsedCommands {
     command: Command,
+    amount: usize,
+}
+
+#[derive(Debug, PartialEq)]
+struct CompiledCollapsedCommand {
+    command: CompiledCommand,
     amount: usize,
 }
 
@@ -97,59 +116,216 @@ fn parse_input(input: &str) -> Vec<CollapsedCommands> {
     commands
 }
 
-fn process_input(commands: Vec<CollapsedCommands>) -> String {
-    let mut memory = [0; 30_000];
-    let mut memory_index = 0;
+fn process_input(commands: Vec<CompiledCollapsedCommand>) -> String {
+    let mut memory = [0u8; 30_000];
+    let mut memory_index = 15_000;
     let mut index = 0;
-    let mut output = String::new();
+    let mut output = Vec::new();
+    //let mut processed_commands_map: HashMap<CompiledCommand, usize> = HashMap::new();
     while index < commands.len() {
         let command = &commands[index];
+        //*processed_commands_map
+        //.entry(command.command.clone())
+        //.or_insert(0) += 1;
         match command.command {
-            Command::Plus => {
-                memory[memory_index] += command.amount;
-            }
-            Command::Minus => {
-                memory[memory_index] -= command.amount;
-            }
-            Command::LeftLoop if memory[memory_index] == 0 => {
-                index = command.amount;
-            }
-            Command::LeftLoop => {}
-            Command::RightLoop => {
-                index = command.amount - 1;
-            }
-            Command::Right => {
-                memory_index = (memory_index + command.amount) % 30_000;
-            }
-            Command::Left => {
-                memory_index = (memory_index + 30_000 - command.amount) % 30_000;
-            }
-            Command::Output => {
-                let mut i = 0;
-                while i < command.amount {
-                    output.push(memory[memory_index] as u8 as char);
-                    i += 1;
+            CompiledCommand::RightLoop => {
+                if memory[memory_index] != 0 {
+                    index = command.amount;
                 }
             }
-            Command::Input => {
+            CompiledCommand::Right => {
+                memory_index += command.amount;
+                if memory_index >= 30_000 {
+                    memory_index = memory_index % 30_000;
+                }
+            }
+            CompiledCommand::Left => {
+                if memory_index < command.amount {
+                    memory_index += 30_000 - command.amount;
+                } else {
+                    memory_index -= command.amount;
+                }
+            }
+            CompiledCommand::LeftLoop => {
+                if memory[memory_index] == 0 {
+                    index = command.amount;
+                }
+            }
+            CompiledCommand::Plus => {
+                memory[memory_index] = memory[memory_index].wrapping_add(command.amount as u8);
+            }
+            CompiledCommand::Minus => {
+                memory[memory_index] = memory[memory_index].wrapping_sub(command.amount as u8);
+            }
+            CompiledCommand::SetZero => {
+                memory[memory_index] = 0;
+                index += 2;
+            }
+            CompiledCommand::Output => {
+                for _ in 0..command.amount {
+                    output.push(memory[memory_index]);
+                }
+            }
+            CompiledCommand::Input => {
                 // Handle input from the user
                 let mut buffer = [0];
                 std::io::stdin()
                     .read_exact(&mut buffer)
                     .expect("Failed to read input");
-                memory[memory_index] = buffer[0] as usize;
+                memory[memory_index] = buffer[0];
             }
         }
         index += 1;
     }
-    output
+    //print!("{:?}", processed_commands_map);
+    String::from_utf8(output).expect("Invalid UTF-8")
+}
+
+fn compile(commands: Vec<CollapsedCommands>) -> Vec<CompiledCollapsedCommand> {
+    let mut compiled_commands = Vec::new();
+    let mut index = 0;
+
+    while index < commands.len() {
+        let current_command = &commands[index];
+        match current_command {
+            CollapsedCommands {
+                command: Command::LeftLoop,
+                amount: _,
+            } if index + 2 < commands.len()
+                && commands[index + 1]
+                    == CollapsedCommands {
+                        command: Command::Minus,
+                        amount: 1,
+                    }
+                && commands[index + 2].command == Command::RightLoop =>
+            {
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::SetZero,
+                    amount: 1,
+                });
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::SetZero,
+                    amount: 1,
+                });
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::SetZero,
+                    amount: 1,
+                });
+                index = index + 3;
+            }
+            CollapsedCommands {
+                command: Command::LeftLoop,
+                amount,
+            } => {
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::LeftLoop,
+                    amount: *amount,
+                });
+                index += 1;
+            }
+            CollapsedCommands {
+                command: Command::RightLoop,
+                amount,
+            } => {
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::RightLoop,
+                    amount: *amount,
+                });
+                index += 1;
+            }
+            CollapsedCommands {
+                command: Command::Plus,
+                amount,
+            } => {
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::Plus,
+                    amount: *amount,
+                });
+                index += 1;
+            }
+            CollapsedCommands {
+                command: Command::Minus,
+                amount,
+            } => {
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::Minus,
+                    amount: *amount,
+                });
+                index += 1;
+            }
+            CollapsedCommands {
+                command: Command::Right,
+                amount,
+            } => {
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::Right,
+                    amount: *amount,
+                });
+                index += 1;
+            }
+            CollapsedCommands {
+                command: Command::Left,
+                amount,
+            } => {
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::Left,
+                    amount: *amount,
+                });
+                index += 1;
+            }
+            CollapsedCommands {
+                command: Command::Output,
+                amount,
+            } => {
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::Output,
+                    amount: *amount,
+                });
+                index += 1;
+            }
+            CollapsedCommands {
+                command: Command::Input,
+                amount,
+            } => {
+                compiled_commands.push(CompiledCollapsedCommand {
+                    command: CompiledCommand::Input,
+                    amount: *amount,
+                });
+                index += 1;
+            }
+        }
+    }
+
+    compiled_commands
 }
 
 fn main() {
+    let start = std::time::Instant::now();
+
+    let file_read_start = std::time::Instant::now();
     let file_contents = read_file("src/testfile.bf");
+    let file_read_duration = file_read_start.elapsed();
+
+    let parse_start = std::time::Instant::now();
     let commands: Vec<CollapsedCommands> = parse_input(&file_contents);
-    let results = process_input(commands);
+    let parse_duration = parse_start.elapsed();
+
+    let compile_start = std::time::Instant::now();
+    let compiled_commands = compile(commands);
+    let compile_duration = compile_start.elapsed();
+
+    let execution_start = std::time::Instant::now();
+    let results = process_input(compiled_commands);
+    let execution_duration = execution_start.elapsed();
+
+    let duration = start.elapsed();
+
     println!("{}", results);
+    println!("File read duration: {:?}", file_read_duration);
+    println!("Parse duration: {:?}", parse_duration);
+    println!("Compile duration: {:?}", compile_duration);
+    println!("Execution duration: {:?}", execution_duration);
+    println!("Time elapsed: {:?}", duration);
 }
 
 #[cfg(test)]
@@ -184,13 +360,13 @@ mod tests {
 
     #[test]
     fn test_process_simple_input() {
-        let input: Vec<CollapsedCommands> = vec![
-            CollapsedCommands {
-                command: Command::Plus,
+        let input: Vec<CompiledCollapsedCommand> = vec![
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Plus,
                 amount: 65,
             },
-            CollapsedCommands {
-                command: Command::Output,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Output,
                 amount: 1,
             },
         ];
@@ -201,37 +377,37 @@ mod tests {
 
     #[test]
     fn test_multiple_characters_print() {
-        let input: Vec<CollapsedCommands> = vec![
-            CollapsedCommands {
-                command: Command::Plus,
+        let input: Vec<CompiledCollapsedCommand> = vec![
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Plus,
                 amount: 66,
             },
-            CollapsedCommands {
-                command: Command::Right,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Right,
                 amount: 1,
             },
-            CollapsedCommands {
-                command: Command::Plus,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Plus,
                 amount: 65,
             },
-            CollapsedCommands {
-                command: Command::Left,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Left,
                 amount: 1,
             },
-            CollapsedCommands {
-                command: Command::Right,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Right,
                 amount: 1,
             },
-            CollapsedCommands {
-                command: Command::Output,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Output,
                 amount: 1,
             },
-            CollapsedCommands {
-                command: Command::Left,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Left,
                 amount: 1,
             },
-            CollapsedCommands {
-                command: Command::Output,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Output,
                 amount: 2,
             },
         ];
@@ -242,30 +418,136 @@ mod tests {
 
     #[test]
     fn test_multiple_collapsed_jumps() {
-        let input: Vec<CollapsedCommands> = vec![
-            CollapsedCommands {
-                command: Command::Plus,
+        let input: Vec<CompiledCollapsedCommand> = vec![
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Plus,
                 amount: 65,
             },
-            CollapsedCommands {
-                command: Command::Right,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Right,
                 amount: 2,
             },
-            CollapsedCommands {
-                command: Command::Left,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Left,
                 amount: 1,
             },
-            CollapsedCommands {
-                command: Command::Left,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Left,
                 amount: 1,
             },
-            CollapsedCommands {
-                command: Command::Output,
+            CompiledCollapsedCommand {
+                command: CompiledCommand::Output,
                 amount: 1,
             },
         ];
 
         let output = process_input(input);
         assert_eq!(output, "A");
+    }
+
+    #[test]
+    fn test_set_zero() {
+        let input: Vec<CollapsedCommands> = vec![
+            CollapsedCommands {
+                command: Command::LeftLoop,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::Minus,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::RightLoop,
+                amount: 1,
+            },
+        ];
+        let expected_output: Vec<CompiledCollapsedCommand> = vec![CompiledCollapsedCommand {
+            command: CompiledCommand::SetZero,
+            amount: 1,
+        }];
+
+        let compiled_input = compile(input);
+        assert_eq!(compiled_input, expected_output);
+    }
+
+    #[test]
+    fn test_complex_set_zero() {
+        let input: Vec<CollapsedCommands> = vec![
+            CollapsedCommands {
+                command: Command::LeftLoop,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::LeftLoop,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::Minus,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::RightLoop,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::RightLoop,
+                amount: 1,
+            },
+        ];
+
+        let expected_output: Vec<CompiledCollapsedCommand> = vec![
+            CompiledCollapsedCommand {
+                command: CompiledCommand::LeftLoop,
+                amount: 1,
+            },
+            CompiledCollapsedCommand {
+                command: CompiledCommand::SetZero,
+                amount: 1,
+            },
+            CompiledCollapsedCommand {
+                command: CompiledCommand::RightLoop,
+                amount: 1,
+            },
+        ];
+        let compiled_input = compile(input);
+        assert_eq!(compiled_input, expected_output);
+    }
+
+    #[test]
+    fn test_loops_correctly_parsed() {
+        let input = "++[->+<]";
+        let expected_output: Vec<CollapsedCommands> = vec![
+            CollapsedCommands {
+                command: Command::Plus,
+                amount: 2,
+            },
+            CollapsedCommands {
+                command: Command::LeftLoop,
+                amount: 7,
+            },
+            CollapsedCommands {
+                command: Command::Minus,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::Right,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::Plus,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::Left,
+                amount: 1,
+            },
+            CollapsedCommands {
+                command: Command::RightLoop,
+                amount: 2,
+            },
+        ];
+
+        let parsed_input = parse_input(input);
+        assert_eq!(parsed_input, expected_output);
     }
 }
